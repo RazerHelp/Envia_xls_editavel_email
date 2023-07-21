@@ -1,0 +1,386 @@
+*&---------------------------------------------------------------------*
+*& Report  Z_DAVI_EXCEL_COLORIDO_EMAIL
+*&---------------------------------------------------------------------*
+
+REPORT z_davi_excel_colorido_email.
+
+*----------------------------------------------------------*
+* Para excel xml
+*----------------------------------------------------------*
+
+TYPES: BEGIN OF xml_line,
+         data(255) TYPE x,
+       END OF xml_line,
+
+       BEGIN OF ty_table,
+         string    TYPE string,
+         number    TYPE i,
+       END OF ty_table.
+
+DATA : it_mail TYPE STANDARD TABLE OF somlreci1,
+       wa_mail TYPE somlreci1.
+DATA : objpack   LIKE sopcklsti1  OCCURS 2  WITH HEADER LINE.
+DATA : objhead   LIKE solisti1    OCCURS 1  WITH HEADER LINE.
+DATA : objbin    LIKE solix       OCCURS 10 WITH HEADER LINE.
+DATA : objtxt    LIKE solisti1    OCCURS 10 WITH HEADER LINE.
+DATA : reclist   LIKE somlreci1   OCCURS 5  WITH HEADER LINE.
+DATA : doc_chng  LIKE sodocchgi1.
+DATA : tab_lines LIKE sy-tabix.
+
+DATA : l_num(3).
+DATA : subj_date(10) TYPE c.
+DATA : lv_date TYPE char10.
+DATA : l_ixml            TYPE REF TO if_ixml,
+       l_streamfactory   TYPE REF TO if_ixml_stream_factory,
+       l_ostream         TYPE REF TO if_ixml_ostream,
+       l_renderer        TYPE REF TO if_ixml_renderer,
+       l_document        TYPE REF TO if_ixml_document.
+DATA : l_element_root        TYPE REF TO if_ixml_element,
+       ns_attribute          TYPE REF TO if_ixml_attribute,
+       r_element_properties  TYPE REF TO if_ixml_element,
+       r_element             TYPE REF TO if_ixml_element,
+       r_worksheet           TYPE REF TO if_ixml_element,
+       r_table               TYPE REF TO if_ixml_element,
+       r_column              TYPE REF TO if_ixml_element,
+       r_row                 TYPE REF TO if_ixml_element,
+       r_cell                TYPE REF TO if_ixml_element,
+       r_data                TYPE REF TO if_ixml_element,
+       l_value               TYPE string,
+       l_type                TYPE string,
+       l_text(100)           TYPE c,
+       r_styles              TYPE REF TO if_ixml_element,
+       r_style               TYPE REF TO if_ixml_element,
+       r_style1              TYPE REF TO if_ixml_element,
+       r_format              TYPE REF TO if_ixml_element,
+       r_border              TYPE REF TO if_ixml_element,
+       num_rows              TYPE i.
+DATA : g_sent_to_all   TYPE sonv-flag,
+       g_tab_lines     TYPE i,
+       lv_labst        TYPE char17,
+       lv_value        TYPE char13.
+DATA : l_xml_table       TYPE TABLE OF xml_line,
+       wa_xml            TYPE xml_line,
+       l_xml_size        TYPE i,
+       l_rc              TYPE i.
+
+DATA: it_table TYPE TABLE OF ty_table,
+      wa_table TYPE          ty_table.
+
+
+START-OF-SELECTION.
+
+  PERFORM f_alimenta_tabela.
+  PERFORM f_cria_fomenta_xml.
+  PERFORM f_envia_email.
+
+*&---------------------------------------------------------------------*
+*&      Form  F_CRIA_FOMENTA_XML
+*&---------------------------------------------------------------------*
+FORM f_cria_fomenta_xml .
+  CLEAR: l_xml_size,  l_xml_table.
+
+  PERFORM f_cria_xml.
+  PERFORM f_formata_excel.
+  PERFORM f_cria_worksheet.
+  PERFORM f_cria_tabela.
+  PERFORM f_xml_formata_coluna USING '50'.   " String
+  PERFORM f_xml_formata_coluna USING '50'.   " Number
+  PERFORM f_xml_linha_branca_apos_cabec.
+  PERFORM f_xml_coluna_cabecalho USING 'String'.
+  PERFORM f_xml_coluna_cabecalho USING 'Number'.
+  PERFORM f_linha_branca.
+  PERFORM f_preenche_xml.
+  PERFORM f_xml_salva_xml.
+ENDFORM.                    " F_CRIA_FOMENTA_XML
+*&---------------------------------------------------------------------*
+*&      Form  F_ALIMENTA_TABELA
+*&---------------------------------------------------------------------*
+FORM f_alimenta_tabela .
+  CLEAR wa_table.
+  wa_table-number = 1.
+  wa_table-string = 'Um'.
+  APPEND wa_table TO it_table.
+
+  CLEAR wa_table.
+  wa_table-number = 2.
+  wa_table-string = 'Dois'.
+  APPEND wa_table TO it_table.
+ENDFORM.                    " F_ALIMENTA_TABELA
+*&---------------------------------------------------------------------*
+*&      Form  F_XML_COLUMN_FORMATTING
+*&---------------------------------------------------------------------*
+FORM f_xml_formata_coluna  USING utp_value.
+  r_column = l_document->create_simple_element( name = 'Column'  parent = r_table ).
+  r_column->set_attribute_ns( name = 'Width'  prefix = 'ss'  value = utp_value ).
+ENDFORM.                    " F_XML_COLUMN_FORMATTING
+*&---------------------------------------------------------------------*
+*&      Form  F_XML_COLUMN_HEADERS
+*&---------------------------------------------------------------------*
+FORM f_xml_coluna_cabecalho USING utp_value.
+  r_cell = l_document->create_simple_element( name = 'Cell'  parent = r_row ).
+  r_cell->set_attribute_ns( name = 'StyleID'  prefix = 'ss'  value = 'Header' ).
+  r_data = l_document->create_simple_element( name = 'Data'  value = utp_value  parent = r_cell ).
+  r_data->set_attribute_ns( name = 'Type'  prefix = 'ss' value = 'String' ).
+ENDFORM.                    " F_XML_COLUMN_HEADERS
+*&---------------------------------------------------------------------*
+*&      Form  F_XML_VALUE_COLUMN
+*&---------------------------------------------------------------------*
+FORM f_xml_value_column  USING utp_data.
+  r_cell = l_document->create_simple_element( name = 'Cell'  parent = r_row ).
+  r_cell->set_attribute_ns( name = 'StyleID'  prefix = 'ss'  value = 'Data' ).
+  l_value = utp_data.
+  r_data = l_document->create_simple_element( name = 'Data'  value = l_value   parent = r_cell ).           " Data
+  r_data->set_attribute_ns( name = 'Type'  prefix = 'ss'  value = 'String' ).                               " Cell format
+ENDFORM.                    " F_XML_VALUE_COLUMN
+*&---------------------------------------------------------------------*
+*&      Form  F_XML_BLANK_ROW
+*&---------------------------------------------------------------------*
+FORM f_xml_linha_branca_apos_cabec .
+* Linha branca
+  r_row = l_document->create_simple_element( name = 'Row'  parent = r_table ).
+* Coluna do cabeçalho em branco
+  r_row = l_document->create_simple_element( name = 'Row'  parent = r_table ).
+  r_row->set_attribute_ns( name = 'AutoFitHeight'  prefix = 'ss'  value = '1' ).
+ENDFORM.                    " F_XML_BLANK_ROW
+*&---------------------------------------------------------------------*
+*&      Form  F_XML_SAVE_XML
+*&---------------------------------------------------------------------*
+FORM f_xml_salva_xml.
+
+* Cria um Stream Factory
+  l_streamfactory = l_ixml->create_stream_factory( ).
+* Conecta tabela XML interna á Stream Factory
+  l_ostream = l_streamfactory->create_ostream_itable( table = l_xml_table ).
+* Gera o Document
+  l_renderer = l_ixml->create_renderer( ostream  = l_ostream  document = l_document ).
+  l_rc = l_renderer->render( ).
+* Salva o documento XML
+  l_xml_size = l_ostream->get_num_written_raw( ).
+ENDFORM.                    " F_XML_SAVE_XML
+*&---------------------------------------------------------------------*
+*&      Form  F_PREENCHE_XML
+*&---------------------------------------------------------------------*
+FORM f_preenche_xml .
+  LOOP AT it_table INTO wa_table.
+    r_row = l_document->create_simple_element( name = 'Row'  parent = r_table ).
+    PERFORM f_xml_value_column USING wa_table-string.
+    PERFORM f_xml_value_column USING wa_table-number.
+  ENDLOOP.
+ENDFORM.                    " F_PREENCHE_XML
+*&---------------------------------------------------------------------*
+*&      Form  F_LINHA_BRANCA
+*&---------------------------------------------------------------------*
+FORM f_linha_branca .
+  r_row = l_document->create_simple_element( name = 'Row'  parent = r_table ).
+  r_cell = l_document->create_simple_element( name = 'Cell'  parent = r_row ).
+  r_cell->set_attribute_ns( name = 'StyleID'  prefix = 'ss'  value = 'Data' ).
+ENDFORM.                    " F_LINHA_BRANCA
+*&---------------------------------------------------------------------*
+*&      Form  F_CRIA_TABELA
+*&---------------------------------------------------------------------*
+FORM f_cria_tabela .
+  r_table = l_document->create_simple_element( name = 'Table'  parent = r_worksheet ).
+  r_table->set_attribute_ns( name = 'FullColumns'  prefix = 'x'  value = '1' ).
+  r_table->set_attribute_ns( name = 'FullRows'     prefix = 'x'  value = '1' ).
+ENDFORM.                    " F_CRIA_TABELA
+*&---------------------------------------------------------------------*
+*&      Form  F_CRIA_WORKSHEET
+*&---------------------------------------------------------------------*
+FORM f_cria_worksheet .
+  r_worksheet = l_document->create_simple_element( name = 'Worksheet'  parent = l_element_root ).
+  r_worksheet->set_attribute_ns( name = 'Name'  prefix = 'ss'  value = 'Sheet1' ).
+ENDFORM.                    " F_CRIA_WORKSHEET
+*&---------------------------------------------------------------------*
+*&      Form  F_CRIA_XML
+*&---------------------------------------------------------------------*
+FORM f_cria_xml .
+* Criando um ixml Factory
+  l_ixml = cl_ixml=>create( ).
+* Criando o DOM Object Model
+  l_document = l_ixml->create_document( ).
+* Criar Root Node 'Workbook'
+  l_element_root  = l_document->create_simple_element( name = 'Workbook'  parent = l_document ).
+  l_element_root->set_attribute( name = 'xmlns'  value = 'urn:schemas-microsoft-com:office:spreadsheet' ).
+
+  ns_attribute = l_document->create_namespace_decl( name = 'ss'  prefix = 'xmlns'  uri = 'urn:schemas-microsoft-com:office:spreadsheet' ).
+  l_element_root->set_attribute_node( ns_attribute ).
+
+  ns_attribute = l_document->create_namespace_decl( name = 'x'  prefix = 'xmlns'  uri = 'urn:schemas-microsoft-com:office:excel' ).
+  l_element_root->set_attribute_node( ns_attribute ).
+
+* Criando node para propriedades do documento.
+  r_element_properties = l_document->create_simple_element( name = 'MATERIAL_REPORT'  parent = l_element_root ).
+  l_value = sy-uname.
+  l_document->create_simple_element( name = 'Author'  value = l_value  parent = r_element_properties  ).
+ENDFORM.                    " F_CRIA_XML
+*&---------------------------------------------------------------------*
+*&      Form  F_FORMATA_EXCEL
+*&---------------------------------------------------------------------*
+FORM f_formata_excel .
+
+  " Estilo geral
+
+  r_styles = l_document->create_simple_element( name = 'Styles'  parent = l_element_root  ).
+
+  " Estilo do cabeçalho
+
+  r_style  = l_document->create_simple_element( name = 'Style'   parent = r_styles  ).
+  r_style->set_attribute_ns( name = 'ID'  prefix = 'ss'  value = 'Header' ).
+
+  r_format  = l_document->create_simple_element( name = 'Font'  parent = r_style  ).
+  r_format->set_attribute_ns( name = 'Bold'  prefix = 'ss'  value = '1' ).
+
+  r_format  = l_document->create_simple_element( name = 'Interior' parent = r_style  ).
+  r_format->set_attribute_ns( name = 'Color'   prefix = 'ss'  value = '#92D050' ).
+  r_format->set_attribute_ns( name = 'Pattern' prefix = 'ss'  value = 'Solid' ).
+
+  r_format  = l_document->create_simple_element( name = 'Alignment'  parent = r_style  ).
+  r_format->set_attribute_ns( name = 'Vertical'  prefix = 'ss'  value = 'Center' ).
+  r_format->set_attribute_ns( name = 'WrapText'  prefix = 'ss'  value = '1' ).
+
+  r_border  = l_document->create_simple_element( name = 'Borders'  parent = r_style ).
+  r_format  = l_document->create_simple_element( name = 'Border'   parent = r_border  ).
+  r_format->set_attribute_ns( name = 'Position'  prefix = 'ss'  value = 'Bottom' ).
+  r_format->set_attribute_ns( name = 'LineStyle'  prefix = 'ss'  value = 'Continuous' ).
+  r_format->set_attribute_ns( name = 'Weight'  prefix = 'ss'  value = '1' ).
+
+  r_format  = l_document->create_simple_element( name = 'Border'   parent = r_border  ).
+  r_format->set_attribute_ns( name = 'Position'  prefix = 'ss'  value = 'Left' ).
+  r_format->set_attribute_ns( name = 'LineStyle'  prefix = 'ss'  value = 'Continuous' ).
+  r_format->set_attribute_ns( name = 'Weight'  prefix = 'ss'  value = '1' ).
+
+  r_format  = l_document->create_simple_element( name = 'Border'   parent = r_border  ).
+  r_format->set_attribute_ns( name = 'Position'  prefix = 'ss'  value = 'Top' ).
+  r_format->set_attribute_ns( name = 'LineStyle'  prefix = 'ss'  value = 'Continuous' ).
+  r_format->set_attribute_ns( name = 'Weight'  prefix = 'ss'  value = '1' ).
+
+  r_format  = l_document->create_simple_element( name = 'Border'   parent = r_border  ).
+  r_format->set_attribute_ns( name = 'Position'  prefix = 'ss'  value = 'Right' ).
+  r_format->set_attribute_ns( name = 'LineStyle'  prefix = 'ss'  value = 'Continuous' ).
+  r_format->set_attribute_ns( name = 'Weight'  prefix = 'ss'  value = '1' ).
+
+  " Estilo dos dados
+
+  r_style1  = l_document->create_simple_element( name = 'Style'   parent = r_styles  ).
+  r_style1->set_attribute_ns( name = 'ID'  prefix = 'ss'  value = 'Data' ).
+
+  r_border  = l_document->create_simple_element( name = 'Borders'  parent = r_style1 ).
+  r_format  = l_document->create_simple_element( name = 'Border'   parent = r_border  ).
+  r_format->set_attribute_ns( name = 'Position'  prefix = 'ss'  value = 'Bottom' ).
+  r_format->set_attribute_ns( name = 'LineStyle'  prefix = 'ss'  value = 'Continuous' ).
+  r_format->set_attribute_ns( name = 'Weight'  prefix = 'ss'  value = '1' ).
+
+  r_format  = l_document->create_simple_element( name = 'Border'   parent = r_border  ).
+  r_format->set_attribute_ns( name = 'Position'  prefix = 'ss'  value = 'Left' ).
+  r_format->set_attribute_ns( name = 'LineStyle'  prefix = 'ss'  value = 'Continuous' ).
+  r_format->set_attribute_ns( name = 'Weight'  prefix = 'ss'  value = '1' ).
+
+  r_format  = l_document->create_simple_element( name = 'Border'   parent = r_border  ).
+  r_format->set_attribute_ns( name = 'Position'  prefix = 'ss'  value = 'Top' ).
+  r_format->set_attribute_ns( name = 'LineStyle'  prefix = 'ss'  value = 'Continuous' ).
+  r_format->set_attribute_ns( name = 'Weight'  prefix = 'ss'  value = '1' ).
+
+  r_format  = l_document->create_simple_element( name = 'Border'   parent = r_border  ).
+  r_format->set_attribute_ns( name = 'Position'   prefix = 'ss'  value = 'Right' ).
+  r_format->set_attribute_ns( name = 'LineStyle'  prefix = 'ss'  value = 'Continuous' ).
+  r_format->set_attribute_ns( name = 'Weight'     prefix = 'ss'  value = '1' ).
+ENDFORM.                    " F_FORMATA_EXCEL
+*&---------------------------------------------------------------------*
+*&      Form  F_ENVIA_EMAIL
+*&---------------------------------------------------------------------*
+FORM f_envia_email .
+  DATA: ltp_msg       TYPE string,
+         ltp_name      TYPE string.
+
+  lv_date = sy-datum.
+* Assunto do email
+  doc_chng-obj_name  = 'Divulgação'.
+  CONCATENATE lv_date+6(2) '-' lv_date+4(2) '-' lv_date+0(4) INTO subj_date.
+  CONCATENATE 'Divulgação' subj_date INTO doc_chng-obj_descr SEPARATED BY space.
+
+  IF it_table[] IS NOT INITIAL.
+    " Corpo do email
+    PERFORM build_body_of_mail USING: 'Segue em anexo a divulgação'.
+  ENDIF.
+
+  DESCRIBE TABLE objtxt LINES tab_lines.
+  READ TABLE objtxt INDEX tab_lines.
+  doc_chng-doc_size = ( tab_lines - 1 ) * 255 + strlen( objtxt ).
+* Packing List For the E-mail Body
+  objpack-head_start = 1.
+  objpack-head_num   = 0.
+  objpack-body_start = 1.
+  objpack-body_num   = tab_lines.
+  objpack-doc_type   = 'RAW'.
+  APPEND objpack.
+
+  " Cria o anexo de email
+  CLEAR objbin.
+  LOOP AT l_xml_table INTO wa_xml.
+    CLEAR objbin.
+    objbin-line = wa_xml-data.
+    APPEND objbin.
+  ENDLOOP.
+
+  DESCRIBE TABLE objbin LINES tab_lines.
+  objhead = 'Divulgação'.
+  APPEND objhead.
+
+  IF it_table[] IS NOT INITIAL.
+* Packing List For the E-mail Attachment
+    objpack-transf_bin = 'X'.
+    objpack-head_start = 1.
+    objpack-head_num   = 0.
+    objpack-body_start = 1.
+    objpack-body_num = tab_lines.
+    CONCATENATE 'Lista divulgação' subj_date INTO objpack-obj_descr SEPARATED BY space.
+    objpack-doc_type = 'XLSX'.
+    objpack-doc_size = tab_lines * 255.
+    APPEND objpack.
+  ENDIF.
+
+  " Quem vai receber.
+  CLEAR reclist.
+  reclist-receiver = 'EMAIL@DOMINIO.COM'.
+  reclist-rec_type   = 'U'.  " Internet address
+  reclist-com_type   = 'INT'.
+  reclist-notif_del  = 'X'.
+  reclist-notif_ndel = 'X'.
+  APPEND reclist.
+
+* Envia email e documento
+  CALL FUNCTION 'SO_NEW_DOCUMENT_ATT_SEND_API1'
+    EXPORTING
+      document_data              = doc_chng
+      put_in_outbox              = 'X'
+      commit_work                = 'X'
+    TABLES
+      packing_list               = objpack
+      object_header              = objhead
+      contents_txt               = objtxt
+      contents_hex               = objbin
+      receivers                  = reclist
+    EXCEPTIONS
+      too_many_receivers         = 1
+      document_not_sent          = 2
+      operation_no_authorization = 4
+      OTHERS                     = 99.
+  IF sy-subrc <> 0.
+    MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+            WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4 DISPLAY LIKE 'S'.
+  ELSE.
+    CONCATENATE 'E-mail enviado para o endereço:'
+                reclist-receiver
+                INTO ltp_msg
+                SEPARATED BY space.
+    MESSAGE ltp_msg TYPE 'S' .
+  ENDIF.
+ENDFORM.                    " F_ENVIA_EMAIL
+*&---------------------------------------------------------------------*
+*&      Form  BUILD_BODY_OF_MAIL
+*&---------------------------------------------------------------------*
+FORM build_body_of_mail  USING    utp_msg.
+  objtxt = utp_msg.
+  APPEND objtxt.
+  CLEAR  objtxt.
+ENDFORM.                    " BUILD_BODY_OF_MAIL
